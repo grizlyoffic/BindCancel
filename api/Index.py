@@ -1,94 +1,240 @@
-# api/index.py
-from http.server import BaseHTTPRequestHandler
+from flask import Flask, request, jsonify
 import requests
-import json
-from urllib.parse import urlparse, parse_qs
 
-class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Parse query parameters
-        query = urlparse(self.path).query
-        params = parse_qs(query)
-        
-        # Check if cancelbind parameter exists
-        if 'cancelbind' not in params:
-            self.send_response(400)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            response = {
-                "success": False,
-                "error": "cancelbind parameter required. Use ?cancelbind={access_token}"
-            }
-            self.wfile.write(json.dumps(response).encode())
-            return
-        
-        access_token = params['cancelbind'][0]
-        
-        try:
-            # STEP 1: Get bind info
-            info_url = f"https://bind-info-nu.vercel.app/bind_info?access_token={access_token}"
-            
-            info_response = requests.get(info_url)
-            info_data = info_response.json()
-            
-            email = None
-            try:
-                email = info_data["data"]["current_email"]
-            except:
-                pass
-            
-            # STEP 2: Cancel bind request
-            url = "https://100067.connect.gopapi.io/game/account_security/bind:cancel_request"
-            
-            headers = {
-                "User-Agent": "GarenaMSDK/4.0.30",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json"
-            }
-            
-            data = {
-                "app_id": "100067",
-                "access_token": access_token
-            }
-            
-            response = requests.post(url, headers=headers, data=data)
-            
-            # Prepare response
-            result = {
-                "success": False,
-                "status_code": response.status_code,
-                "email": email
-            }
-            
-            # Check if successful
-            if response.status_code == 200:
-                response_data = response.json()
-                if response_data.get("result") == 0:
-                    result["success"] = True
-                    result["message"] = "Successfully Cancel Bind"
-                else:
-                    result["error"] = response_data.get("message", "Unknown error")
-            else:
-                result["error"] = f"HTTP {response.status_code}"
-            
-            # Try to parse response as JSON
-            try:
-                result["server_response"] = response.json()
-            except:
-                result["server_response"] = response.text
-            
-            # Send response
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(result, indent=2).encode())
-            
-        except Exception as e:
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            response = {
-                "success": False,
-                "error": str(e)
-            }
-            self.wfile.write(json.dumps(response).encode())
+app = Flask(__name__)
+
+HEADERS = {
+    "User-Agent": "GarenaMSDK/4.0.30",
+    "Content-Type": "application/x-www-form-urlencoded"
+}
+
+APP_ID = "100067"
+
+# ---------------- BIND INFO ----------------
+
+@app.route("/bindinfo")
+def bindinfo():
+
+    token = request.args.get("access_token")
+
+    url = f"https://bind-info-nu.vercel.app/bind_info?access_token={token}"
+
+    r = requests.get(url)
+
+    return jsonify(r.json())
+
+
+# ---------------- UNBIND FLOW ----------------
+
+@app.route("/unbind")
+def unbind():
+
+    token = request.args.get("access_token")
+    email = request.args.get("email")
+    otp = request.args.get("otp")
+
+    if not token or not email:
+        return jsonify({"error":"access_token and email required"})
+
+    # STEP 1 OTP SEND
+    if not otp:
+
+        url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
+
+        data = {
+            "email":email,
+            "locale":"en_PK",
+            "region":"PK",
+            "app_id":APP_ID,
+            "access_token":token
+        }
+
+        r = requests.post(url,headers=HEADERS,data=data)
+
+        return jsonify({
+            "step":"otp_sent",
+            "response":r.json()
+        })
+
+    # STEP 2 VERIFY + UNBIND
+
+    url = "https://100067.connect.garena.com/game/account_security/bind:verify_identity"
+
+    data = {
+        "email":email,
+        "otp":otp,
+        "app_id":APP_ID,
+        "access_token":token
+    }
+
+    r = requests.post(url,headers=HEADERS,data=data)
+
+    js = r.json()
+
+    if js.get("result") != 0:
+        return jsonify(js)
+
+    identity_token = js.get("identity_token")
+
+    url2 = "https://100067.connect.garena.com/game/account_security/bind:create_unbind_request"
+
+    data2 = {
+        "app_id":APP_ID,
+        "access_token":token,
+        "identity_token":identity_token
+    }
+
+    r2 = requests.post(url2,headers=HEADERS,data=data2)
+
+    return jsonify({
+        "step":"unbind_request_created",
+        "verify":js,
+        "unbind":r2.json()
+    })
+
+
+# ---------------- CANCEL BIND ----------------
+
+@app.route("/cancelbind")
+def cancelbind():
+
+    token = request.args.get("access_token")
+
+    url = "https://100067.connect.gopapi.io/game/account_security/bind:cancel_request"
+
+    data = {
+        "app_id":APP_ID,
+        "access_token":token
+    }
+
+    r = requests.post(url,headers=HEADERS,data=data)
+
+    return jsonify(r.json())
+
+
+# ---------------- CHANGE BIND FLOW ----------------
+
+@app.route("/change")
+def change():
+
+    token = request.args.get("access_token")
+    old_email = request.args.get("old_email")
+    otp = request.args.get("otp")
+    new_email = request.args.get("new_email")
+    notp = request.args.get("notp")
+
+    if not token or not old_email:
+        return jsonify({"error":"access_token and old_email required"})
+
+
+    # STEP 1 SEND OTP OLD EMAIL
+
+    if not otp:
+
+        url = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
+
+        data = {
+            "email":old_email,
+            "locale":"en_PK",
+            "region":"PK",
+            "app_id":APP_ID,
+            "access_token":token
+        }
+
+        r = requests.post(url,headers=HEADERS,data=data)
+
+        return jsonify({
+            "step":"otp_sent_old_email",
+            "response":r.json()
+        })
+
+
+    # STEP 2 VERIFY OLD EMAIL
+
+    url = "https://100067.connect.garena.com/game/account_security/bind:verify_identity"
+
+    data = {
+        "email":old_email,
+        "otp":otp,
+        "app_id":APP_ID,
+        "access_token":token
+    }
+
+    r = requests.post(url,headers=HEADERS,data=data)
+
+    js = r.json()
+
+    if js.get("result") != 0:
+        return jsonify(js)
+
+    identity_token = js.get("identity_token")
+
+
+    # STEP 3 SEND OTP NEW EMAIL
+
+    if new_email and not notp:
+
+        url2 = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
+
+        data2 = {
+            "email":new_email,
+            "locale":"en_PK",
+            "region":"PK",
+            "app_id":APP_ID,
+            "access_token":token
+        }
+
+        r2 = requests.post(url2,headers=HEADERS,data=data2)
+
+        return jsonify({
+            "step":"otp_sent_new_email",
+            "identity_token":identity_token,
+            "response":r2.json()
+        })
+
+
+    # STEP 4 VERIFY NEW EMAIL + REBIND
+
+    if new_email and notp:
+
+        url3 = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
+
+        data3 = {
+            "email":new_email,
+            "otp":notp,
+            "app_id":APP_ID,
+            "access_token":token
+        }
+
+        r3 = requests.post(url3,headers=HEADERS,data=data3)
+
+        js2 = r3.json()
+
+        if js2.get("result") != 0:
+            return jsonify(js2)
+
+        verifier_token = js2.get("verifier_token")
+
+        url4 = "https://100067.connect.garena.com/game/account_security/bind:create_rebind_request"
+
+        data4 = {
+            "identity_token":identity_token,
+            "email":new_email,
+            "app_id":APP_ID,
+            "verifier_token":verifier_token,
+            "access_token":token
+        }
+
+        r4 = requests.post(url4,headers=HEADERS,data=data4)
+
+        return jsonify({
+            "step":"rebind_created",
+            "verify_new":js2,
+            "rebind":r4.json()
+        })
+
+    return jsonify({"message":"missing parameters"})
+    
+
+if __name__ == "__main__":
+    app.run()
