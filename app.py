@@ -128,20 +128,4 @@ def change():
     return res_rebind
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)    url = "https://100067.connect.gopapi.io/game/account_security/bind:cancel_request"
-    data = {"app_id":APP_ID,"access_token":token}
-    r = requests.post(url, headers=HEADERS, data=data)
-    return jsonify(r.json())
-
-# ------------------- BIND INFO -------------------
-@app.route("/info", methods=["GET"])
-def bind_info():
-    token = request.args.get("access_token")
-    if not token:
-        return jsonify({"message":"missing parameters: access_token"}),400
-    url = f"https://bind-info-nu.vercel.app/bind_info?access_token={token}"
-    r = requests.get(url)
-    return jsonify(r.json())
-
-if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=5000)
